@@ -1,9 +1,10 @@
 // Ozon color-swatch updater (runs as a Railway Function, Bun).
 // MODE: "scan" = list article codes (part before first "_") containing P17 + counts;
 //       "dry"  = read & log backup/plan; "one" = update ONLY_OFFER; "all" = update every matched card.
-// JOBS: "CODE=series;CODE=series" e.g. "SilCaseiP17CP=sc17cp" — CODE must equal the article part before the first "_".
+// JOBS: "PREFIX=series;..." e.g. "SilCaseiP17CP_=sc17cp" — article must start with PREFIX (ending with "_" keeps models apart).
+// Per card: ozon/<series>/swatch/<n>.jpg -> color image; ozon/<series>/main/<n>.jpg (if exists) -> replaces the old main photo (old one removed).
 const MODE: string = Bun.env.MODE ?? "dry";
-const JOBS: [string, string][] = (Bun.env.JOBS ?? "SilCaseiP17CP=sc17cp").split(";").filter(Boolean).map(j => j.split("=") as [string, string]);
+const JOBS: [string, string][] = (Bun.env.JOBS ?? "SilCaseiP17CP_=sc17cp").split(";").filter(Boolean).map(j => j.split("=") as [string, string]);
 const ONLY_OFFER = Bun.env.ONLY_OFFER ?? "";
 const RAW = "https://raw.githubusercontent.com/erekkali/maksot-images/main/ozon/";
 
@@ -47,7 +48,7 @@ async function has(url: string) {
 
 let updated = 0;
 for (const [CODE, SERIES] of JOBS) {
-  const sel = products.filter(p => code(p.offer_id) === CODE);
+  const sel = products.filter(p => p.offer_id.startsWith(CODE));
   console.log(`JOB ${CODE} -> ${SERIES}: FOUND ${sel.length} mode=${MODE} only=${ONLY_OFFER}`);
   const info: any[] = [];
   for (let i = 0; i < sel.length; i += 100) {
@@ -62,13 +63,17 @@ for (const [CODE, SERIES] of JOBS) {
     const color: string[] = Array.isArray(p.color_image) ? p.color_image : (p.color_image ? [p.color_image] : []);
     const i360: string[] = p.images360 ?? [];
     console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, archived: p.is_archived, autoarchived: p.is_autoarchived, status: p.statuses?.status_name ?? p.statuses?.status, primary, images, color, i360 }));
-    const target = `${RAW}${SERIES}/swatch/${num}.jpg`;
-    if (!/^\d+$/.test(num) || !(await has(target))) { console.log(`SKIP ${offer}: no swatch file for number ${num}`); continue; }
-    const pics = [...primary, ...images.filter(u => !primary.includes(u))];
+    const sw = `${RAW}${SERIES}/swatch/${num}.jpg`, mainUrl = `${RAW}${SERIES}/main/${num}.jpg`;
+    const okNum = /^\d+$/.test(num);
+    const hasSw = okNum && await has(sw), hasMain = okNum && await has(mainUrl);
+    if (!hasSw && !hasMain) { console.log(`SKIP ${offer}: no files for number ${num}`); continue; }
+    const rest = images.filter(u => !primary.includes(u));
+    const pics = hasMain ? [mainUrl, ...rest] : [...primary, ...rest];
+    const colorImg = hasSw ? sw : (color[0] ?? "");
     const doIt = MODE === "all" || (MODE === "one" && offer === ONLY_OFFER);
-    console.log(`${doIt ? "APPLY" : "PLAN"} ${offer} -> ${target} (keeps ${pics.length} photos, first=${pics[0] ?? "-"})`);
+    console.log(`${doIt ? "APPLY" : "PLAN"} ${offer}: main=${hasMain ? "NEW (old removed: " + (primary[0] ?? "-") + ")" : "keep"} swatch=${hasSw ? "NEW" : "keep"} photos=${pics.length}`);
     if (!doIt) continue;
-    const res = await api("/v1/product/pictures/import", { product_id: p.id, images: pics, color_image: target, images360: i360 });
+    const res = await api("/v1/product/pictures/import", { product_id: p.id, images: pics, color_image: colorImg, images360: i360 });
     const bad = (res.result?.pictures ?? []).filter((x: any) => x.state && x.state !== "imported" && x.state !== "pending");
     console.log(`RESULT ${offer} pictures=${res.result?.pictures?.length ?? 0} bad=${JSON.stringify(bad).slice(0, 300)}`);
     updated++;
