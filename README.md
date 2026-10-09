@@ -1,0 +1,1 @@
+# maksot-images
