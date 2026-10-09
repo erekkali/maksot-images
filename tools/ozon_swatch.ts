@@ -1,5 +1,5 @@
 // Ozon color-swatch updater (runs as a Railway Function, Bun).
-// MODE: "scan" = list article codes (part before first "_") containing P17 + counts;
+// MODE: "scan" = list article codes (WL_<code> or part before first "_") matching SCAN regex (default P17) + counts and color numbers;
 //       "dry"  = read & log backup/plan; "one" = update ONLY_OFFER; "all" = update every matched card.
 // JOBS: "PREFIX=series;..." e.g. "SilCaseiP17CP_=sc17cp" — article must start with PREFIX (ending with "_" keeps models apart).
 // Per card: ozon/<series>/swatch/<n>.jpg -> color image; ozon/<series>/main/<n>.jpg (if exists) -> replaces the old main photo (old one removed).
@@ -30,12 +30,13 @@ for (const vis of ["ALL", "ARCHIVED"]) {
   }
 }
 const products = [...new Map(all.map(x => [x.product_id, x])).values()];
-const code = (o: string) => o.split("_")[0];
+const code = (o: string) => { const a = o.split("_"); return a[0] === "WL" ? a[0] + "_" + a[1] : a[0]; };
+const SCAN = new RegExp(Bun.env.SCAN ?? "P17", "i");
 
 if (MODE === "scan") {
   const m = new Map<string, string[]>();
-  for (const p of products) if (/P17/i.test(p.offer_id)) { const c = code(p.offer_id); m.set(c, [...(m.get(c) ?? []), p.offer_id]); }
-  for (const [c, offs] of [...m.entries()].sort()) console.log(`CODE ${c} count=${offs.length} e.g. ${offs.slice(0, 3).join(", ")}`);
+  for (const p of products) if (SCAN.test(p.offer_id)) { const c = code(p.offer_id); m.set(c, [...(m.get(c) ?? []), p.offer_id]); }
+  for (const [c, offs] of [...m.entries()].sort()) console.log(`CODE ${c} count=${offs.length} nums=${[...new Set(offs.map(o => o.split("_").pop()))].sort((a, b) => +a - +b).join(",")}`);
   console.log("DONE scan");
   process.exit(0);
 }
