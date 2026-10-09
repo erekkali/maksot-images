@@ -48,6 +48,7 @@ async function has(url: string) {
 }
 
 let updated = 0;
+const failed: string[] = [], stuck: string[] = [];
 for (const [CODE, SERIES] of JOBS) {
   const sel = products.filter(p => p.offer_id.startsWith(CODE));
   console.log(`JOB ${CODE} -> ${SERIES}: FOUND ${sel.length} mode=${MODE} only=${ONLY_OFFER}`);
@@ -64,6 +65,7 @@ for (const [CODE, SERIES] of JOBS) {
     const color: string[] = Array.isArray(p.color_image) ? p.color_image : (p.color_image ? [p.color_image] : []);
     const i360: string[] = p.images360 ?? [];
     console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, archived: p.is_archived, autoarchived: p.is_autoarchived, status: p.statuses?.status_name ?? p.statuses?.status, primary, images, color, i360 }));
+    if ([...primary, ...color].some(u => u.includes("githubusercontent"))) { stuck.push(offer); console.log(`STUCK ${offer}: Ozon has not re-hosted our image yet`); }
     const sw = `${RAW}${SERIES}/swatch/${num}.jpg`, mainUrl = `${RAW}${SERIES}/main/${num}.jpg`;
     const okNum = /^\d+$/.test(num);
     const hasSw = okNum && await has(sw), hasMain = okNum && await has(mainUrl);
@@ -74,11 +76,13 @@ for (const [CODE, SERIES] of JOBS) {
     const doIt = MODE === "all" || (MODE === "one" && offer === ONLY_OFFER);
     console.log(`${doIt ? "APPLY" : "PLAN"} ${offer}: main=${hasMain ? "NEW (old removed: " + (primary[0] ?? "-") + ")" : "keep"} swatch=${hasSw ? "NEW" : "keep"} photos=${pics.length}`);
     if (!doIt) continue;
-    const res = await api("/v1/product/pictures/import", { product_id: p.id, images: pics, color_image: colorImg, images360: i360 });
-    const bad = (res.result?.pictures ?? []).filter((x: any) => x.state && x.state !== "imported" && x.state !== "pending");
-    console.log(`RESULT ${offer} pictures=${res.result?.pictures?.length ?? 0} bad=${JSON.stringify(bad).slice(0, 300)}`);
-    updated++;
+    try {
+      const res = await api("/v1/product/pictures/import", { product_id: p.id, images: pics, color_image: colorImg, images360: i360 });
+      const bad = (res.result?.pictures ?? []).filter((x: any) => x.state && x.state !== "imported" && x.state !== "pending");
+      console.log(`RESULT ${offer} pictures=${res.result?.pictures?.length ?? 0} bad=${JSON.stringify(bad).slice(0, 300)}`);
+      updated++;
+    } catch (e) { failed.push(offer); console.log(`FAIL ${offer}: ${String(e).slice(0, 300)}`); }
     await Bun.sleep(400);
   }
 }
-console.log(`DONE mode=${MODE} updated=${updated}`);
+console.log(`DONE mode=${MODE} updated=${updated} failed=${failed.length} ${failed.join(",")} stuck=${stuck.length} ${stuck.join(",")}`);
