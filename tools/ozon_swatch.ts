@@ -1,5 +1,6 @@
 // Ozon color-swatch updater (runs as a Railway Function, Bun).
 // MODE: "scan" = list article codes (WL_<code> or part before first "_") matching SCAN regex (default P17) + counts and color numbers;
+//       "verify" = log average case color of main photo/swatch for VERIFY_NUMS;
 //       "dry"  = read & log backup/plan; "one" = update ONLY_OFFER; "all" = update every matched card.
 // JOBS: "PREFIX=series;..." e.g. "SilCaseiP17CP_=sc17cp" — article must start with PREFIX (ending with "_" keeps models apart).
 // Per card: ozon/<series>/swatch/<n>.jpg -> color image; ozon/<series>/main/<n>.jpg (if exists) -> replaces the old main photo (old one removed).
@@ -8,6 +9,20 @@ const JOBS: [string, string][] = (Bun.env.JOBS ?? "SilCaseiP17CP_=sc17cp").split
 const ONLY_OFFER = Bun.env.ONLY_OFFER ?? "";
 const QUIET = Bun.env.QUIET === "1"; // only STUCK/RESULT/FAIL/DONE lines (avoids Railway log rate limit on big checks)
 const RAW = "https://raw.githubusercontent.com/erekkali/maksot-images/main/ozon/";
+import jpeg from "jpeg-js";
+// MODE "verify": for cards whose offer ends with _<n> where n is in VERIFY_NUMS, log the average case color of the main photo and color swatch
+const VERIFY_NUMS = (Bun.env.VERIFY_NUMS ?? "").split(",").filter(Boolean);
+async function avgColor(url: string, fx0: number, fy0: number, fx1: number, fy1: number) {
+  try {
+    const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    const img = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 512 });
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let y = Math.floor(img.height * fy0); y < img.height * fy1; y += 2) for (let x = Math.floor(img.width * fx0); x < img.width * fx1; x += 2) {
+      const i = (y * img.width + x) * 4; r += img.data[i]; g += img.data[i + 1]; b += img.data[i + 2]; n++;
+    }
+    return `${img.width}x${img.height} rgb(${Math.round(r / n)},${Math.round(g / n)},${Math.round(b / n)})`;
+  } catch (e) { return "ERR " + String(e).slice(0, 80); }
+}
 
 const H = { "Client-Id": Bun.env.OZON_CLIENT_ID ?? "", "Api-Key": Bun.env.OZON_API_KEY ?? "", "Content-Type": "application/json" };
 if (!H["Client-Id"] || !H["Api-Key"]) { console.log("NO_KEYS"); process.exit(0); }
@@ -66,6 +81,10 @@ for (const [CODE, SERIES] of JOBS) {
     const color: string[] = Array.isArray(p.color_image) ? p.color_image : (p.color_image ? [p.color_image] : []);
     const i360: string[] = p.images360 ?? [];
     if (!QUIET) console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, archived: p.is_archived, autoarchived: p.is_autoarchived, status: p.statuses?.status_name ?? p.statuses?.status, primary, images, color, i360 }));
+    if (MODE === "verify") {
+      if (VERIFY_NUMS.includes(num)) console.log(`VERIFY ${offer} main=${primary[0] ?? "-"} ${await avgColor(primary[0] ?? "", 0.62, 0.62, 0.78, 0.78)} swatch=${await avgColor(color[0] ?? "", 0.4, 0.75, 0.6, 0.85)}`);
+      continue;
+    }
     if ([...primary, ...color].some(u => u.includes("githubusercontent"))) { stuck.push(offer); console.log(`STUCK ${offer}: Ozon has not re-hosted our image yet`); }
     const sw = `${RAW}${SERIES}/swatch/${num}.jpg`, mainUrl = `${RAW}${SERIES}/main/${num}.jpg`;
     const okNum = /^\d+$/.test(num);
