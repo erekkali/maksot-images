@@ -6,6 +6,7 @@
 const MODE: string = Bun.env.MODE ?? "dry";
 const JOBS: [string, string][] = (Bun.env.JOBS ?? "SilCaseiP17CP_=sc17cp").split(";").filter(Boolean).map(j => j.split("=") as [string, string]);
 const ONLY_OFFER = Bun.env.ONLY_OFFER ?? "";
+const QUIET = Bun.env.QUIET === "1"; // only STUCK/RESULT/FAIL/DONE lines (avoids Railway log rate limit on big checks)
 const RAW = "https://raw.githubusercontent.com/erekkali/maksot-images/main/ozon/";
 
 const H = { "Client-Id": Bun.env.OZON_CLIENT_ID ?? "", "Api-Key": Bun.env.OZON_API_KEY ?? "", "Content-Type": "application/json" };
@@ -64,17 +65,17 @@ for (const [CODE, SERIES] of JOBS) {
     const images: string[] = p.images ?? [];
     const color: string[] = Array.isArray(p.color_image) ? p.color_image : (p.color_image ? [p.color_image] : []);
     const i360: string[] = p.images360 ?? [];
-    console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, archived: p.is_archived, autoarchived: p.is_autoarchived, status: p.statuses?.status_name ?? p.statuses?.status, primary, images, color, i360 }));
+    if (!QUIET) console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, archived: p.is_archived, autoarchived: p.is_autoarchived, status: p.statuses?.status_name ?? p.statuses?.status, primary, images, color, i360 }));
     if ([...primary, ...color].some(u => u.includes("githubusercontent"))) { stuck.push(offer); console.log(`STUCK ${offer}: Ozon has not re-hosted our image yet`); }
     const sw = `${RAW}${SERIES}/swatch/${num}.jpg`, mainUrl = `${RAW}${SERIES}/main/${num}.jpg`;
     const okNum = /^\d+$/.test(num);
     const hasSw = okNum && await has(sw), hasMain = okNum && await has(mainUrl);
-    if (!hasSw && !hasMain) { console.log(`SKIP ${offer}: no files for number ${num}`); continue; }
+    if (!hasSw && !hasMain) { if (!QUIET) console.log(`SKIP ${offer}: no files for number ${num}`); continue; }
     const rest = images.filter(u => !primary.includes(u));
     const pics = hasMain ? [mainUrl, ...rest] : [...primary, ...rest];
     const colorImg = hasSw ? sw : (color[0] ?? "");
     const doIt = MODE === "all" || (MODE === "one" && offer === ONLY_OFFER);
-    console.log(`${doIt ? "APPLY" : "PLAN"} ${offer}: main=${hasMain ? "NEW (old removed: " + (primary[0] ?? "-") + ")" : "keep"} swatch=${hasSw ? "NEW" : "keep"} photos=${pics.length}`);
+    if (!QUIET || doIt) console.log(`${doIt ? "APPLY" : "PLAN"} ${offer}: main=${hasMain ? "NEW (old removed: " + (primary[0] ?? "-") + ")" : "keep"} swatch=${hasSw ? "NEW" : "keep"} photos=${pics.length}`);
     if (!doIt) continue;
     try {
       const res = await api("/v1/product/pictures/import", { product_id: p.id, images: pics, color_image: colorImg, images360: i360 });
