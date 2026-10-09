@@ -61,7 +61,7 @@ for (const [CODE, SERIES] of JOBS) {
     const images: string[] = p.images ?? [];
     const color: string[] = Array.isArray(p.color_image) ? p.color_image : (p.color_image ? [p.color_image] : []);
     const i360: string[] = p.images360 ?? [];
-    console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, primary, images, color, i360 }));
+    console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, archived: p.is_archived, autoarchived: p.is_autoarchived, status: p.statuses?.status_name ?? p.statuses?.status, primary, images, color, i360 }));
     const target = `${RAW}${SERIES}/swatch/${num}.jpg`;
     if (!/^\d+$/.test(num) || !(await has(target))) { console.log(`SKIP ${offer}: no swatch file for number ${num}`); continue; }
     const pics = [...primary, ...images.filter(u => !primary.includes(u))];
