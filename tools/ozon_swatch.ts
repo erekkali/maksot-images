@@ -1,11 +1,11 @@
 // Ozon color-swatch updater (runs as a Railway Function, Bun).
-// MODE: "dry" = only read & log backup/plan; "one" = update ONLY_OFFER; "all" = update every matched card.
+// MODE: "scan" = list article codes (part before first "_") containing P17 + counts;
+//       "dry"  = read & log backup/plan; "one" = update ONLY_OFFER; "all" = update every matched card.
+// JOBS: "CODE=series;CODE=series" e.g. "SilCaseiP17CP=sc17cp" — CODE must equal the article part before the first "_".
 const MODE: string = Bun.env.MODE ?? "dry";
-const PREFIX = Bun.env.PREFIX ?? "SilCaseiP17CP_";
-const SERIES = Bun.env.SERIES ?? "sc17cp";
+const JOBS: [string, string][] = (Bun.env.JOBS ?? "SilCaseiP17CP=sc17cp").split(";").filter(Boolean).map(j => j.split("=") as [string, string]);
 const ONLY_OFFER = Bun.env.ONLY_OFFER ?? "";
-const BASE = `https://raw.githubusercontent.com/erekkali/maksot-images/main/ozon/${SERIES}/swatch/`;
-const AVAILABLE = ["4","5","7","8","9","11","14","15","17","18","19","20","21","41","44","45","47","48","49","52","66","68"];
+const RAW = "https://raw.githubusercontent.com/erekkali/maksot-images/main/ozon/";
 
 const H = { "Client-Id": Bun.env.OZON_CLIENT_ID ?? "", "Api-Key": Bun.env.OZON_API_KEY ?? "", "Content-Type": "application/json" };
 if (!H["Client-Id"] || !H["Api-Key"]) { console.log("NO_KEYS"); process.exit(0); }
@@ -17,48 +17,62 @@ async function api(path: string, body: unknown) {
   return JSON.parse(t);
 }
 
-// 1. all products with the prefix
-const ids: { product_id: number; offer_id: string }[] = [];
+const all: { product_id: number; offer_id: string }[] = [];
 for (const vis of ["ALL", "ARCHIVED"]) {
   let last_id = "";
   for (;;) {
     const j = await api("/v3/product/list", { filter: { visibility: vis }, last_id, limit: 1000 });
     const items = j.result?.items ?? [];
-    for (const it of items) if (String(it.offer_id).startsWith(PREFIX)) ids.push({ product_id: it.product_id, offer_id: it.offer_id });
+    for (const it of items) all.push({ product_id: it.product_id, offer_id: String(it.offer_id) });
     last_id = j.result?.last_id ?? "";
     if (!items.length || !last_id) break;
   }
 }
-const uniq = [...new Map(ids.map(x => [x.product_id, x])).values()];
-console.log(`FOUND ${uniq.length} products with prefix ${PREFIX}`);
+const products = [...new Map(all.map(x => [x.product_id, x])).values()];
+const code = (o: string) => o.split("_")[0];
 
-// 2. details
-const info: any[] = [];
-for (let i = 0; i < uniq.length; i += 100) {
-  const j = await api("/v3/product/info/list", { product_id: uniq.slice(i, i + 100).map(x => x.product_id) });
-  info.push(...(j.items ?? j.result?.items ?? []));
+if (MODE === "scan") {
+  const m = new Map<string, string[]>();
+  for (const p of products) if (/P17/i.test(p.offer_id)) { const c = code(p.offer_id); m.set(c, [...(m.get(c) ?? []), p.offer_id]); }
+  for (const [c, offs] of [...m.entries()].sort()) console.log(`CODE ${c} count=${offs.length} e.g. ${offs.slice(0, 3).join(", ")}`);
+  console.log("DONE scan");
+  process.exit(0);
 }
-if (info[0]) console.log("SAMPLE_KEYS " + Object.keys(info[0]).join(","));
+
+const exists = new Map<string, boolean>();
+async function has(url: string) {
+  if (!exists.has(url)) exists.set(url, (await fetch(url, { method: "HEAD" })).ok);
+  return exists.get(url)!;
+}
 
 let updated = 0;
-for (const p of info) {
-  const offer = String(p.offer_id);
-  const num = offer.split("_").pop() ?? "";
-  const primary: string[] = Array.isArray(p.primary_image) ? p.primary_image : (p.primary_image ? [p.primary_image] : []);
-  const images: string[] = p.images ?? [];
-  const color: string[] = Array.isArray(p.color_image) ? p.color_image : (p.color_image ? [p.color_image] : []);
-  const i360: string[] = p.images360 ?? [];
-  const target = AVAILABLE.includes(num) ? BASE + num + ".jpg" : "";
-  console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, primary, images, color, i360 }));
-  if (!target) { console.log(`SKIP ${offer}: no swatch for number ${num}`); continue; }
-  if (color.includes(target)) { console.log(`OK_ALREADY ${offer}`); continue; }
-  const all = [...primary, ...images.filter(u => !primary.includes(u))];
-  const doIt = MODE === "all" || (MODE === "one" && offer === ONLY_OFFER);
-  console.log(`PLAN ${offer} -> ${target} (keeps ${all.length} photos, first=${all[0] ?? "-"}) ${doIt ? "APPLY" : "dry"}`);
-  if (!doIt) continue;
-  const res = await api("/v1/product/pictures/import", { product_id: p.id, images: all, color_image: target, images360: i360 });
-  console.log("RESULT " + offer + " " + JSON.stringify(res).slice(0, 600));
-  updated++;
-  await Bun.sleep(400);
+for (const [CODE, SERIES] of JOBS) {
+  const sel = products.filter(p => code(p.offer_id) === CODE);
+  console.log(`JOB ${CODE} -> ${SERIES}: FOUND ${sel.length} mode=${MODE} only=${ONLY_OFFER}`);
+  const info: any[] = [];
+  for (let i = 0; i < sel.length; i += 100) {
+    const j = await api("/v3/product/info/list", { product_id: sel.slice(i, i + 100).map(x => x.product_id) });
+    info.push(...(j.items ?? j.result?.items ?? []));
+  }
+  for (const p of info) {
+    const offer = String(p.offer_id);
+    const num = offer.split("_").pop() ?? "";
+    const primary: string[] = Array.isArray(p.primary_image) ? p.primary_image : (p.primary_image ? [p.primary_image] : []);
+    const images: string[] = p.images ?? [];
+    const color: string[] = Array.isArray(p.color_image) ? p.color_image : (p.color_image ? [p.color_image] : []);
+    const i360: string[] = p.images360 ?? [];
+    console.log("BACKUP " + JSON.stringify({ id: p.id, offer, num, primary, images, color, i360 }));
+    const target = `${RAW}${SERIES}/swatch/${num}.jpg`;
+    if (!/^\d+$/.test(num) || !(await has(target))) { console.log(`SKIP ${offer}: no swatch file for number ${num}`); continue; }
+    const pics = [...primary, ...images.filter(u => !primary.includes(u))];
+    const doIt = MODE === "all" || (MODE === "one" && offer === ONLY_OFFER);
+    console.log(`${doIt ? "APPLY" : "PLAN"} ${offer} -> ${target} (keeps ${pics.length} photos, first=${pics[0] ?? "-"})`);
+    if (!doIt) continue;
+    const res = await api("/v1/product/pictures/import", { product_id: p.id, images: pics, color_image: target, images360: i360 });
+    const bad = (res.result?.pictures ?? []).filter((x: any) => x.state && x.state !== "imported" && x.state !== "pending");
+    console.log(`RESULT ${offer} pictures=${res.result?.pictures?.length ?? 0} bad=${JSON.stringify(bad).slice(0, 300)}`);
+    updated++;
+    await Bun.sleep(400);
+  }
 }
 console.log(`DONE mode=${MODE} updated=${updated}`);
