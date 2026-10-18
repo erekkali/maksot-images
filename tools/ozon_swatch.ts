@@ -86,8 +86,10 @@ for (const [CODE, SERIES] of JOBS) {
       continue;
     }
     if ([...primary, ...color].some(u => u.includes("githubusercontent"))) { stuck.push(offer); console.log(`STUCK ${offer}: Ozon has not re-hosted our image yet`); }
-    const sw = `${RAW}${SERIES}/swatch/${num}.jpg`, mainUrl = `${RAW}${SERIES}/main/${num}.jpg`;
-    const okNum = /^\d+$/.test(num);
+    // file key: colour number (e.g. 15) or, for single-colour products, the whole offer id (e.g. ShockProof_iP15)
+    const key = /^\d+$/.test(num) ? num : offer.replace(/[^A-Za-z0-9_-]/g, "");
+    const sw = `${RAW}${SERIES}/swatch/${key}.jpg`, mainUrl = `${RAW}${SERIES}/main/${key}.jpg`;
+    const okNum = key.length > 0;
     const hasSw = okNum && await has(sw), hasMain = okNum && await has(mainUrl);
     if (!hasSw && !hasMain) { if (!QUIET) console.log(`SKIP ${offer}: no files for number ${num}`); continue; }
     const rest = images.filter(u => !primary.includes(u));
